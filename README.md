@@ -6,7 +6,7 @@
 
 ## 网站
 
-部署地址由 GitHub Pages 设置确定。发布源为 `main` 分支的 `/docs` 目录。
+[打开屿生，开始造岛](https://yaozhhhh.github.io/island-atelier/)。发布源为 `main` 分支的 `/docs` 目录。
 
 ## 本地查看
 
