@@ -41,13 +41,16 @@ var island=new T.Group();scene.add(island);
 var picks=[];
 var decorations=[],selectedDecoration='birds',decorClock=0,decorManager=window.IslandDecorations.create(T,scene);
 var buildFeedback=window.IslandFeedback.create(T,scene);
-var cells={},seed=24,density=.72,mode='raise',history=[],future=[],stroke=null,dirty=false,detailPending=false,lastDraft=-Infinity,plants=0;
+var cells={},seed=24,density=.72,mode='raise',plantKind='grass',plantErase=false,MAX_PLANTED_TREES=32,history=[],future=[],stroke=null,dirty=false,detailPending=false,lastDraft=-Infinity,plants=0;
 var nextDiagnostics=0;
 var pitch=.70,yaw=.73,zoom=1,quality=1.35,time=0,waves=true,stopped=false,frame=0,last=0,slow=0,contextLosses=0;
 var ray=new T.Raycaster(),pointer=new T.Vector2(),ground=new T.Plane(new T.Vector3(0,1,0),-window.IslandTerrain.sea),hitPoint=new T.Vector3();
 var gridOn=false,CELL=window.IslandTerrain.step;
 var landMesh,leafMesh,grassMesh,pendingWaterfall=null;
 function key(x,z){return x+','+z;}
+function hasGrass(c){return !c||c.grass===1||(c.grass===undefined&&!!c.green);}
+function grassLift(c,y){return hasGrass(c)&&(c&&c.grass===1||density>0&&y>.48)?.18:0;}
+function treeSite(c){var x=c.x*CELL,z=c.z*CELL,p=terrainField.surface(x,z);return p.y>.08&&p.slope<1.3&&!inWatercourse(x,z,.55)?{x:x,y:p.y,z:z}:null;}
 function rand(n){var s=Math.sin(n*127.1+seed*311.7)*43758.5453123;return s-Math.floor(s);}
 function rng(n){return function(){n=(Math.imul(1664525,n)+1013904223)|0;return (n>>>0)/4294967296;};}
 function toast(s){$('toast').textContent=s;$('toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(function(){$('toast').classList.remove('show');},2200);}
@@ -100,7 +103,7 @@ function tuft(batch,x,y,z,random,scale){
  for(var j=0;j<count;j++)leaf(batch,x,y,z,start+j/count*Math.PI*2,(.36+random()*.28)*scale,(.09+random()*.055)*scale,random,new T.Color(greens[Math.floor(random()*greens.length)]));
  plants++;
 }
-var terrainField,propsMesh,palmCount=0,beachCount=0,meadowCount=0,shoreRocks=[],vineCount=0,cliffTreeCount=0;
+var terrainField,propsMesh,palmCount=0,beachCount=0,meadowCount=0,shoreRocks=[],vineCount=0,cliffTreeCount=0,plantedTreeCount=0,plantedGrassCount=0;
 var boulderGeo=new T.IcosahedronGeometry(1,1),coconutGeo=new T.IcosahedronGeometry(1,0);
 function addBoulder(batch,x,y,z,sx,sy,sz,angle,color,geo){
  var pos=(geo||boulderGeo).attributes.position,ca=Math.cos(angle),sa=Math.sin(angle);
@@ -159,7 +162,7 @@ function hangingVine(batch,x,y,z,dx,dz,length,random){
 
 function inWatercourse(x,z,padding){return decorations.some(function(d){if(d.kind!=='waterfall')return false;var dx=d.ex-d.x,dz=d.ez-d.z,t=Math.max(0,Math.min(1,((x-d.x)*dx+(z-d.z)*dz)/(dx*dx+dz*dz)));return Math.hypot(x-d.x-dx*t,z-d.z-dz*t)<padding;});}
 function rebuild(draft){
- var buildStarted=performance.now();var all=Object.keys(cells).map(function(k){return cells[k];}),leaves=new Batch(),props=new Batch();if(!draft){plants=0;palmCount=0;vineCount=0;cliffTreeCount=0;shoreRocks=[];}beachCount=0;meadowCount=0;
+ var buildStarted=performance.now();var all=Object.keys(cells).map(function(k){return cells[k];}),leaves=new Batch(),props=new Batch();if(!draft){plants=0;palmCount=0;vineCount=0;cliffTreeCount=0;plantedTreeCount=0;plantedGrassCount=0;shoreRocks=[];}beachCount=0;meadowCount=0;
  terrainField=window.IslandTerrain.create(cells,seed);
  // Shared vertices: there are no cell meshes or coincident interior faces.
  var N=draft?80:112,span=22,step=span/N,positions=[],colors=[],indices=[],heights=[],slopes=[];
@@ -188,16 +191,31 @@ function rebuild(draft){
  if(landMesh){island.remove(landMesh);landMesh.geometry.dispose();}
  landMesh=new T.Mesh(geometry,rockMaterial);landMesh.castShadow=true;landMesh.receiveShadow=true;island.add(landMesh);landMesh.updateMatrixWorld();picks=[landMesh];
  if(!draft){
- // Wide, level regions are kept readable; palms are sparse and spaced apart.
+ // Hand-planted vegetation takes priority over automatic growth and density settings.
  var planted=[];
- all.sort(function(a,b){return (a.x*17+a.z*73)-(b.x*17+b.z*73);}).forEach(function(c){
+ all.sort(function(a,b){return (a.x*17+a.z*73)-(b.x*17+b.z*73);});
+ all.forEach(function(c){
+  var random=rng((c.x+30)*6619+(c.z+30)*1709+seed*89),site=treeSite(c);
+  if(c.tree===1&&site&&plantedTreeCount<MAX_PLANTED_TREES){
+   palm(props,leaves,site.x,site.y+grassLift(c,site.y),site.z,random,.70+random()*.16);
+   planted.push({x:site.x,z:site.z});plantedTreeCount++;
+  }
+  if(c.grass===1){
+   for(var g=0;g<3;g++){var angle=g*2.094+random()*.35,r=g===0?0:.29,px=c.x*CELL+Math.cos(angle)*r,pz=c.z*CELL+Math.sin(angle)*r,p=terrainField.surface(px,pz);
+    if(p.y>.08&&p.slope<1.3&&!inWatercourse(px,pz,.5)){tuft(leaves,px,p.y+grassLift(c,p.y),pz,random,.42+random()*.12);plantedGrassCount++;}
+   }
+  }
+ });
+ // Wide, level regions are kept readable; automatic palms leave room for planted trees.
+ all.forEach(function(c){
   var random=rng((c.x+30)*13499+(c.z+30)*773+seed*571),x=c.x*CELL+(random()-.5)*.35,z=c.z*CELL+(random()-.5)*.35,p=terrainField.surface(x,z);
-  if(!c.green||density===0||inWatercourse(x,z,.55))return;
+  if(density===0||inWatercourse(x,z,.55))return;
   var wide=p.y>.5&&p.slope<.35;
   [[.45,0],[-.45,0],[0,.45],[0,-.45]].forEach(function(o){if(Math.abs(terrainField.sample(x+o[0],z+o[1]).y-p.y)>.12)wide=false;});
-  if(wide&&random()<density*.56&&palmCount<18&&planted.every(function(q){return Math.hypot(q.x-x,q.z-z)>1.65;})){
+  if(c.tree===undefined&&c.green&&wide&&random()<density*.56&&palmCount<18&&planted.every(function(q){return Math.hypot(q.x-x,q.z-z)>1.65;})){
    palm(props,leaves,x,p.y+.01,z,random);planted.push({x:x,z:z});
   }
+  if(!hasGrass(c))return;
   for(var k=0;k<3;k++){
    var a=random()*6.283,r=.3+random()*.46,px=c.x*CELL+Math.cos(a)*r,pz=c.z*CELL+Math.sin(a)*r,pp=terrainField.surface(px,pz);
    if(pp.y>.14&&pp.slope<2.0&&pp.slope>.28&&random()<density*.85)tuft(leaves,px,pp.y+.19,pz,random,.42+random()*.32);
@@ -206,16 +224,17 @@ function rebuild(draft){
  });
  // High exposed cliff lips can support smaller wind-shaped palms and vines.
  all.forEach(function(c){
-  if(c.h<3||!c.green||density===0)return;
+  if(c.h<3||density===0)return;
   var random=rng((c.x+40)*1747+(c.z+40)*3613+seed*17),dirs=[[1,0],[-1,0],[0,1],[0,-1]];
   dirs.forEach(function(d){
+   var random=rng((c.x+40)*1747+(c.z+40)*3613+seed*17+d[0]*59+d[1]*131);
    var neighbor=cells[key(c.x+d[0],c.z+d[1])];if(neighbor&&neighbor.h>c.h-2)return;
    var x=c.x*CELL+d[0]*.28,z=c.z*CELL+d[1]*.28,p=terrainField.surface(x,z);
    if(p.y<1.2||inWatercourse(x,z,.55))return;
-   if(random()<density*.50&&cliffTreeCount<10&&planted.every(function(q){return Math.hypot(q.x-x,q.z-z)>1.05;})){
+   if(c.tree===undefined&&c.green&&random()<density*.50&&cliffTreeCount<10&&palmCount<MAX_PLANTED_TREES&&planted.every(function(q){return Math.hypot(q.x-x,q.z-z)>1.05;})){
     palm(props,leaves,x,p.y,z,random,.48+random()*.18);planted.push({x:x,z:z});cliffTreeCount++;
    }
-   if(random()<density*.85){
+   if(hasGrass(c)&&random()<density*.85){
     for(var v=0;v<2+Math.floor(random()*2);v++){var side=(v-1)*.17,px=x+d[1]*side,pz=z-d[0]*side,top=terrainField.sample(px,pz).y;
      hangingVine(leaves,px,top+.025,pz,d[0],d[1],Math.min(top-.18,.8+random()*1.5),random);
     }
@@ -235,7 +254,7 @@ function rebuild(draft){
   if(stoneSites.some(function(q){var vx=x-q.x,vy=p.y-q.y,vz=z-q.z;return Math.abs(vx*tangent.x+vy*tangent.y+vz*tangent.z)<(width+q.w)*.36&&Math.abs(vx*up.x+vy*up.y+vz*up.z)<(height+q.h)*.37&&Math.abs(vx*normal.x+vy*normal.y+vz*normal.z)<.4;}))continue;
   addCliffPlate(props,x,p.y,z,width,height,depth,normal,tangent,up,random);
   var grassCell=cells[key(Math.round(x/CELL),Math.round(z/CELL))];
-  if(density>0&&(!grassCell||grassCell.green)&&random()<density*.36){
+  if(density>0&&hasGrass(grassCell)&&random()<density*.36){
    var lift=height*(random()<.65?.42:-.14),px=x+up.x*lift+normal.x*(depth+.025),pz=z+up.z*lift+normal.z*(depth+.025),py=Math.max(p.y+up.y*lift+normal.y*(depth+.025),terrainField.sample(px,pz).y+.015);
    tuft(leaves,px,py,pz,random,.28+random()*.16);cliffGrass++;
   }
@@ -259,7 +278,7 @@ function rebuild(draft){
  propsMesh=new T.Mesh(props.geometry(),newPropsMaterial);propsMesh.castShadow=true;propsMesh.receiveShadow=true;island.add(propsMesh);
  }
  updateShore(all);if(!draft)decorManager.refresh(decorations,terrainField,shoreRocks);updateDecorCount();renderer.shadowMap.needsUpdate=true;$('count').textContent=all.length;$('height').textContent=terrainField.max;$('plants').textContent=palmCount;
- host.setAttribute('data-terrain-stats',JSON.stringify({buildMs:Number((performance.now()-buildStarted).toFixed(2)),draft:!!draft,continuous:true,grassTriangles:cap.geometry.attributes.position.count/3,grassRimEdges:cap.rimEdges,grassFringeTufts:cap.fringeTufts,cliffStones:cliffStones,cliffGrass:cliffGrass,vertices:positions.length/3,triangles:indices.length/3,palms:palmCount,cliffTrees:cliffTreeCount,vines:vineCount,shoreRocks:shoreRocks.length,beachSamples:beachCount,meadowSamples:meadowCount}));var stateText=snapshot(),checksum=0;for(var cs=0;cs<stateText.length;cs++)checksum=(Math.imul(checksum,31)+stateText.charCodeAt(cs))|0;host.setAttribute('data-state-checksum',String(checksum));dirty=false;detailPending=!!draft;lastDraft=performance.now();
+ host.setAttribute('data-terrain-stats',JSON.stringify({buildMs:Number((performance.now()-buildStarted).toFixed(2)),draft:!!draft,continuous:true,grassTriangles:cap.geometry.attributes.position.count/3,grassRimEdges:cap.rimEdges,grassFringeTufts:cap.fringeTufts,cliffStones:cliffStones,cliffGrass:cliffGrass,vertices:positions.length/3,triangles:indices.length/3,palms:palmCount,plantedTrees:plantedTreeCount,plantedGrassTufts:plantedGrassCount,cliffTrees:cliffTreeCount,vines:vineCount,shoreRocks:shoreRocks.length,beachSamples:beachCount,meadowSamples:meadowCount}));var stateText=snapshot(),checksum=0;for(var cs=0;cs<stateText.length;cs++)checksum=(Math.imul(checksum,31)+stateText.charCodeAt(cs))|0;host.setAttribute('data-state-checksum',String(checksum));dirty=false;detailPending=!!draft;lastDraft=performance.now();
 }
 // A world-space distance field replaces a second full-screen depth pass.
 var texSize=128,mapSpan=32,shoreBytes=new Uint8Array(texSize*texSize*4);
@@ -316,7 +335,7 @@ var buildGridMaterial=new T.ShaderMaterial({transparent:true,depthWrite:false,un
 var buildGrid=new T.Mesh(new T.PlaneGeometry(CELL*15,CELL*15),buildGridMaterial);buildGrid.rotation.x=-Math.PI/2;buildGrid.position.y=gridY+.03;buildGrid.renderOrder=6;buildGrid.visible=false;scene.add(buildGrid);
 function gridState(){host.setAttribute('data-grid-state',JSON.stringify({visible:buildGrid.visible,held:gridHeld,height:gridY,cellSize:CELL,columns:15}));}
 function tickBuildGrid(dt){var visible=buildGrid.visible;if(!gridHeld)gridRemaining=Math.max(0,gridRemaining-dt);var alpha=(gridOn||gridHeld) ? .62 : .62*Math.min(1,gridRemaining/.45);buildGridMaterial.uniforms.uOpacity.value=alpha;buildGrid.visible=alpha>.005;if(visible!==buildGrid.visible)gridState();}
-function showBuildGrid(c,held){if(!c||mode==='orbit'||mode==='decorate')return;gridY=Math.max(window.IslandTerrain.sea,terrainField.height(c.x*CELL,c.z*CELL));editPlane.constant=-gridY;var cell=cells[key(c.x,c.z)],grass=cell&&cell.green&&density>0&&gridY>.48;buildGrid.position.y=gridY+(grass ? .21 : .03);gridHeld=!!held;gridRemaining=1.2;tickBuildGrid(0);gridState();}
+function showBuildGrid(c,held){if(!c||mode==='orbit'||mode==='decorate')return;gridY=Math.max(window.IslandTerrain.sea,terrainField.height(c.x*CELL,c.z*CELL));editPlane.constant=-gridY;var cell=cells[key(c.x,c.z)],grass=grassLift(cell,gridY)>0;buildGrid.position.y=gridY+(grass ? .21 : .03);gridHeld=!!held;gridRemaining=1.2;tickBuildGrid(0);gridState();}
 function releaseBuildGrid(){gridHeld=false;gridRemaining=1.2;gridState();}
 function cancelBuildGrid(){gridHeld=false;gridRemaining=0;tickBuildGrid(0);gridState();}
 function updateProjection(){var w=host.clientWidth,h=host.clientHeight,framingWidth=Math.min(w,480),size=8.6*h/framingWidth;camera.left=-size*w/h/zoom;camera.right=size*w/h/zoom;camera.top=size/zoom;camera.bottom=-size/zoom;camera.updateProjectionMatrix();updateCamera();}
@@ -326,17 +345,26 @@ function aim(e){var rect=renderer.domElement.getBoundingClientRect();pointer.set
 function surfacePoint(e){aim(e);return window.IslandTerrain.intersect(terrainField,ray.ray.origin,ray.ray.direction);}
 function select(e){var p;if(stroke&&!stroke.orbit&&stroke.planeActive){aim(e);p=ray.ray.intersectPlane(editPlane,hitPoint);}else p=surfacePoint(e);if(!p){if(!ray.ray.intersectPlane(ground,hitPoint))return null;p=hitPoint;}var x=Math.round(p.x/CELL),z=Math.round(p.z/CELL);if(Math.abs(x)>7||Math.abs(z)>7)return null;return {x:x,z:z};}
 function hoverAt(c){hover.visible=!!c&&mode!=='orbit';if(!c)return;hover.position.set(c.x*CELL,stroke&&!stroke.orbit?buildGrid.position.y:Math.max(.01,terrainField.height(c.x*CELL,c.z*CELL)+.21),c.z*CELL);hover.material.color.set(mode==='lower'?0xffcb9c:mode==='plant'?0xc9fa75:0xfff5be);if(gridOn&&!stroke)showBuildGrid(c,false);}
-function paintOne(x,z){if(Math.abs(x)>7||Math.abs(z)>7)return;var k=key(x,z);if(stroke.visited[k])return;stroke.visited[k]=true;var c=cells[k],wx=x*CELL,wz=z*CELL,oldHeight=terrainField.sample(wx,wz).y,wasGreen=c&&c.green;
+function paintOne(x,z){if(Math.abs(x)>7||Math.abs(z)>7)return;var k=key(x,z);if(stroke.visited[k])return;stroke.visited[k]=true;var c=cells[k],wx=x*CELL,wz=z*CELL,oldHeight=terrainField.sample(wx,wz).y;
  if(mode==='raise'){if(c){if(c.h>=8){toast('这座山已经足够高了 · 最高 8 层');return;}c.h++;}else cells[k]={x:x,z:z,h:1,green:1};}
  else if(mode==='lower'){if(!c)return;c.h--;if(c.h<=0)delete cells[k];}
- else if(mode==='plant'){if(!c)return;c.green=stroke.plantValue;}
- if(mode==='raise')buildFeedback.queue(oldHeight<=-.07?'water':'leaves',wx,wz);else if(mode==='plant'&&!wasGreen&&c.green)buildFeedback.queue('leaves',wx,wz);
+ else if(mode==='plant'){
+  if(!c){if(!stroke.warned)toast('先造一片陆地，再种下草木');stroke.warned=true;return;}
+  var value=stroke.plantErase?0:1,kind=stroke.plantKind;
+  if(c[kind]===value)return;
+  if(value&&kind==='tree'){
+   if(!treeSite(c)){if(!stroke.warned)toast('椰子树需要稍平坦的陆地，请避开瀑布');stroke.warned=true;return;}
+   if(Object.keys(cells).filter(function(id){return cells[id].tree===1;}).length>=MAX_PLANTED_TREES){if(!stroke.warned)toast('已种下 32 棵树，可以先移除一些');stroke.warned=true;return;}
+  }
+  c[kind]=value;
+ }
+ if(mode==='raise')buildFeedback.queue(oldHeight<=-.07?'water':'leaves',wx,wz);else if(mode==='plant'&&!stroke.plantErase)buildFeedback.queue('leaves',wx,wz);
  islandAudio.sound(mode);dirty=true;
 }
 function paint(c){if(!c)return;if(stroke.prev){var dx=c.x-stroke.prev.x,dz=c.z-stroke.prev.z,steps=Math.max(Math.abs(dx),Math.abs(dz));for(var i=1;i<=steps;i++)paintOne(Math.round(stroke.prev.x+dx*i/steps),Math.round(stroke.prev.z+dz*i/steps));}else paintOne(c.x,c.z);stroke.prev=c;}
 function finishStroke(){if(!stroke)return;if(dirty||detailPending)rebuild();if(!stroke.orbit){save();if(stroke.before===snapshot()&&history.length&&history[history.length-1]===stroke.before){history.pop();future=stroke.futureBefore;}updateButtons();if(stroke.planeActive)releaseBuildGrid();}stroke=null;}
 var pendingPointer=null;
-function startPointer(e){if(stroke)return;if(mode==='decorate'&&e.button===0&&!e.altKey){decorationTap={id:e.pointerId,x:e.clientX,y:e.clientY};return;}var c=select(e),orbit=mode==='orbit'||e.button===2||e.altKey,before=snapshot(),futureBefore=future.slice();stroke={id:e.pointerId,orbit:orbit,planeActive:!!c,lastX:e.clientX,lastY:e.clientY,visited:{},prev:null,before:before,futureBefore:futureBefore,plantValue:c&&cells[key(c.x,c.z)]?!cells[key(c.x,c.z)].green:1};if(!orbit){showBuildGrid(c,true);hoverAt(c);checkpoint();paint(c);}else cancelBuildGrid();}
+function startPointer(e){if(stroke)return;if(mode==='decorate'&&e.button===0&&!e.altKey){decorationTap={id:e.pointerId,x:e.clientX,y:e.clientY};return;}var c=select(e),orbit=mode==='orbit'||e.button===2||e.altKey,before=snapshot(),futureBefore=future.slice();stroke={id:e.pointerId,orbit:orbit,planeActive:!!c,lastX:e.clientX,lastY:e.clientY,visited:{},prev:null,before:before,futureBefore:futureBefore,plantKind:plantKind,plantErase:plantErase};if(!orbit){showBuildGrid(c,true);hoverAt(c);checkpoint();paint(c);}else cancelBuildGrid();}
 function movePointer(e){if(mode==='decorate'&&!stroke){decorationHover(e);return;}if(stroke&&stroke.id!==e.pointerId)return;if(stroke&&stroke.orbit){yaw-=(e.clientX-stroke.lastX)*.008;pitch=Math.max(.35,Math.min(1.25,pitch+(e.clientY-stroke.lastY)*.005));stroke.lastX=e.clientX;stroke.lastY=e.clientY;updateCamera();hover.visible=false;}else{var c=select(e);if(stroke&&!stroke.planeActive&&c){showBuildGrid(c,true);stroke.planeActive=true;}hoverAt(c);if(stroke)paint(c);}}
 function flushPointer(){if(pendingPointer){var p=pendingPointer;pendingPointer=null;movePointer(p);}}
 function cancelPointer(){pendingPointer=null;decorationTap=null;hover.visible=false;cancelBuildGrid();if(!stroke)return;var old=stroke;stroke=null;buildFeedback.clear();if(!old.orbit){if(history[history.length-1]===old.before)history.pop();future=old.futureBefore;if(snapshot()!==old.before||detailPending)restore(old.before);updateButtons();}}
@@ -347,7 +375,11 @@ var controls=window.IslandControls.create(renderer.domElement,{
 });
 renderer.domElement.addEventListener('pointerleave',function(){if(!stroke)hover.visible=false;});renderer.domElement.addEventListener('contextmenu',function(e){e.preventDefault();});
 renderer.domElement.addEventListener('wheel',function(e){e.preventDefault();zoom=Math.max(.6,Math.min(1.8,zoom*Math.exp(-e.deltaY*.001)));updateProjection();},{passive:false});
-function setMode(v){cancelWaterfall();flushPointer();finishStroke();controls.reset();decorationTap=null;mode=v;$('decor-tray').hidden=v!=='decorate';$('settings').hidden=true;$('settings-toggle').setAttribute('aria-expanded','false');document.querySelectorAll('.tool').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-mode')===v);b.setAttribute('aria-pressed',b.getAttribute('data-mode')===v?'true':'false');});$('hint').textContent=v==='decorate'?decorationHint():v==='orbit'?'双指捏合缩放 · 拖动或扭转环顾海岛':v==='plant'?'点击切换植被 · 拖划批量种植或清除 · 丰度滑杆控制密度':v==='lower'?'点击削低一层 · 拖划整理海岸 · 可随时撤销':'单指造岛 · 双指缩放、环顾';host.style.cursor=v==='orbit'?'grab':'crosshair';hover.visible=false;}
+function setMode(v){cancelWaterfall();flushPointer();finishStroke();controls.reset();decorationTap=null;mode=v;$('decor-tray').hidden=v!=='decorate';$('plant-tray').hidden=v!=='plant';$('settings').hidden=true;$('settings-toggle').setAttribute('aria-expanded','false');document.querySelectorAll('.tool').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-mode')===v);b.setAttribute('aria-pressed',b.getAttribute('data-mode')===v?'true':'false');});$('hint').textContent=v==='decorate'?decorationHint():v==='orbit'?'双指捏合缩放 · 拖动或扭转环顾海岛':v==='plant'?plantHint():v==='lower'?'点击削低一层 · 拖划整理海岸 · 可随时撤销':'单指造岛 · 双指缩放、环顾';host.style.cursor=v==='orbit'?'grab':'crosshair';hover.visible=false;}
+function plantHint(){return (plantKind==='tree'?'种树':'种草')+' · '+(plantErase?'划过移除所选植被':'点按或拖拽种植')+' · 可撤销';}
+function updatePlantTools(){['grass','tree'].forEach(function(kind){var button=$('plant-'+kind),active=plantKind===kind;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});$('plant-erase').classList.toggle('active',plantErase);$('plant-erase').setAttribute('aria-pressed',String(plantErase));if(mode==='plant')$('hint').textContent=plantHint();}
+['grass','tree'].forEach(function(kind){$('plant-'+kind).addEventListener('click',function(){flushPointer();finishStroke();controls.reset();plantKind=kind;plantErase=false;$('plant-tray').hidden=true;updatePlantTools();});});
+$('plant-erase').addEventListener('click',function(){flushPointer();finishStroke();controls.reset();plantErase=!plantErase;$('plant-tray').hidden=true;updatePlantTools();});
 var decorationTap=null;
 function decorationHint(){if(selectedDecoration==='waterfall')return pendingWaterfall?'② 轻点附近海面 · 点「装饰」可重选':'① 轻点山体，选择瀑布出水口';return selectedDecoration==='erase'?'轻点已有的装饰即可移除 · 随时可以撤销':selectedDecoration==='boat'?'轻点空旷海面，小船会自动环岛巡游':'轻点放置，鸟群会寻找最近的山峦';}
 function cancelWaterfall(){pendingWaterfall=null;if(typeof sourceMarker!=='undefined')sourceMarker.visible=false;host.removeAttribute('data-waterfall-pending');if(mode==='decorate')$('hint').textContent=decorationHint();}
@@ -369,8 +401,8 @@ function placeDecoration(e){
 }
 document.querySelectorAll('.decor-option').forEach(function(b){b.addEventListener('click',function(){cancelWaterfall();selectedDecoration=b.getAttribute('data-decor');$('decor-tray').hidden=true;$('decor-erase').classList.remove('active');$('decor-erase').setAttribute('aria-pressed','false');document.querySelectorAll('.decor-option').forEach(function(q){var active=q===b;q.classList.toggle('active',active);q.setAttribute('aria-pressed',String(active));});$('hint').textContent=decorationHint();});});
 $('decor-erase').addEventListener('click',function(){cancelWaterfall();selectedDecoration='erase';$('decor-tray').hidden=true;this.classList.add('active');this.setAttribute('aria-pressed','true');document.querySelectorAll('.decor-option').forEach(function(b){b.classList.remove('active');b.setAttribute('aria-pressed','false');});$('hint').textContent=decorationHint();});
-$('settings-toggle').addEventListener('click',function(){var open=$('settings').hidden;$('settings').hidden=!open;this.setAttribute('aria-expanded',String(open));if(open)$('decor-tray').hidden=true;else if(mode==='decorate')$('decor-tray').hidden=false;});
-$('settings-close').addEventListener('click',function(){$('settings').hidden=true;$('settings-toggle').setAttribute('aria-expanded','false');if(mode==='decorate')$('decor-tray').hidden=false;});
+$('settings-toggle').addEventListener('click',function(){var open=$('settings').hidden;$('settings').hidden=!open;this.setAttribute('aria-expanded',String(open));if(open){$('decor-tray').hidden=true;$('plant-tray').hidden=true;}else{if(mode==='decorate')$('decor-tray').hidden=false;if(mode==='plant')$('plant-tray').hidden=false;}});
+$('settings-close').addEventListener('click',function(){$('settings').hidden=true;$('settings-toggle').setAttribute('aria-expanded','false');if(mode==='decorate')$('decor-tray').hidden=false;if(mode==='plant')$('plant-tray').hidden=false;});
 document.querySelectorAll('.tool').forEach(function(b){b.addEventListener('click',function(){setMode(b.getAttribute('data-mode'));});});
 $('undo').addEventListener('click',undo);$('redo').addEventListener('click',redo);
 $('regenerate').addEventListener('click',function(){checkpoint();makeIsland(seed+1);toast('另一座岛，另一种可能');});
@@ -384,7 +416,7 @@ $('density').addEventListener('change',function(){densityEditing=false;if(dirty)
 $('rotate-left').addEventListener('click',function(){yaw+=Math.PI/8;updateCamera();});$('rotate-right').addEventListener('click',function(){yaw-=Math.PI/8;updateCamera();});
 $('zoom-in').addEventListener('click',function(){zoom=Math.min(1.8,zoom*1.15);updateProjection();});$('zoom-out').addEventListener('click',function(){zoom=Math.max(.6,zoom/1.15);updateProjection();});
 $('reset-view').addEventListener('click',function(){yaw=.73;pitch=.70;zoom=1;resize();toast('回到最初的视角');});
-window.addEventListener('keydown',function(e){if(e.key==='Escape'){cancelWaterfall();$('hint').textContent=decorationHint();return;}if(e.target.tagName==='INPUT')return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}var modes={'1':'raise','2':'lower','3':'plant','4':'orbit'};if(modes[e.key])setMode(modes[e.key]);});
+window.addEventListener('keydown',function(e){if(e.key==='Escape'){cancelWaterfall();if(mode==='decorate')$('hint').textContent=decorationHint();if(mode==='plant'){$('plant-tray').hidden=true;$('hint').textContent=plantHint();}return;}if(e.target.tagName==='INPUT')return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}var modes={'1':'raise','2':'lower','3':'plant','4':'orbit'};if(modes[e.key])setMode(modes[e.key]);});
 window.addEventListener('resize',resize);
 renderer.domElement.addEventListener('webglcontextlost',function(e){e.preventDefault();stopped=true;cancelAnimationFrame(frame);contextLosses++;$('fallback').hidden=false;$('fallback').querySelector('p').textContent='画面暂时中断，正在尝试保留小岛。';save();});
 renderer.domElement.addEventListener('webglcontextrestored',function(){if(contextLosses>2)return;stopped=false;$('fallback').hidden=true;shore.needsUpdate=true;rebuild();last=0;frame=requestAnimationFrame(animate);});
@@ -395,7 +427,7 @@ function animate(now){if(stopped||document.hidden)return;frame=requestAnimationF
  if(slow>50){slow=0;if(quality>1){quality=1;sun.castShadow=false;renderer.shadowMap.enabled=false;buildFeedback.setEnabled(false);waterMat.uniforms.uDetail.value=.3;resize();toast('已减轻光影，让海岛更流畅');}else if(waves){waves=false;$('waves').checked=false;toast('已暂停海浪动画，保留造岛操作');}else{stopped=true;cancelAnimationFrame(frame);save();islandAudio.suspend();$('fallback').hidden=false;$('fallback').querySelector('p').textContent='这座岛暂时超出了设备的绘制能力，请稍后重新进入。';}}
 }
 var loaded=false;
-try{var saved=JSON.parse(storage.getItem('island-atelier-v1'));if(!previewMode&&saved&&saved.cells&&typeof saved.seed==='number'&&typeof saved.density==='number'&&Object.keys(saved.cells).length<=225){var valid=Object.keys(saved.cells).every(function(k){var c=saved.cells[k];return Number.isInteger(c.x)&&Number.isInteger(c.z)&&Math.abs(c.x)<=7&&Math.abs(c.z)<=7&&Number.isInteger(c.h)&&c.h>=1&&c.h<=8&&k===key(c.x,c.z);});if(valid){cells=saved.cells;seed=saved.seed;decorations=loadDecorations(saved);density=Math.max(0,Math.min(1,saved.density));$('density').value=Math.round(density*100);rebuild();loaded=true;}}}catch(e){}
+try{var saved=JSON.parse(storage.getItem('island-atelier-v1'));if(!previewMode&&saved&&saved.cells&&typeof saved.seed==='number'&&typeof saved.density==='number'&&Object.keys(saved.cells).length<=225){var valid=Object.keys(saved.cells).every(function(k){var c=saved.cells[k];return Number.isInteger(c.x)&&Number.isInteger(c.z)&&Math.abs(c.x)<=7&&Math.abs(c.z)<=7&&Number.isInteger(c.h)&&c.h>=1&&c.h<=8&&k===key(c.x,c.z);});if(valid){cells=saved.cells;Object.keys(cells).forEach(function(k){['grass','tree'].forEach(function(kind){if(cells[k][kind]!==0&&cells[k][kind]!==1)delete cells[k][kind];});});seed=saved.seed;decorations=loadDecorations(saved);density=Math.max(0,Math.min(1,saved.density));$('density').value=Math.round(density*100);rebuild();loaded=true;}}}catch(e){}
 if(!loaded){if(previewTerraces)makeIsland(24);else rebuild();}if(previewMode){document.querySelector('.bottom-note').textContent='示例可自由试玩 · 不覆盖原有存档';}updateDensity();updateButtons();setMode('raise');resize();
 if(window.IslandStorage&&storage.hasReadError())toast('之前的小岛暂时未能读取，请稍后重新进入');
 renderer.debug.onShaderError=function(gl,program,vs,fs){console.error('Shader error',gl.getProgramInfoLog(program),gl.getShaderInfoLog(vs),gl.getShaderInfoLog(fs));stopped=true;$('fallback').hidden=false;$('fallback').querySelector('p').textContent='当前设备无法编译水面效果。请稍后重新进入小工具。';};

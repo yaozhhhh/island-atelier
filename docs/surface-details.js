@@ -8,7 +8,7 @@ function build(T,field,cells,density,positions,slopes,indices,options){
  function tri(a,b,c,shade){[a,b,c].forEach(function(p){top.push(p[0],p[1],p[2]);var q=color(p);col.push(q[0]*shade,q[1]*shade,q[2]*shade);});}
  function tag(p){return p.key||(p.key=p[0].toFixed(5)+','+p[1].toFixed(5)+','+p[2].toFixed(5));}
  function edge(a,b){var ak=tag(a),bk=tag(b),k=ak<bk?ak+'|'+bk:bk+'|'+ak;if(edges[k])delete edges[k];else edges[k]=[a,b];}
- for(var i=0;i<positions.length/3;i++){var x=positions[i*3],y=positions[i*3+1],z=positions[i*3+2],c=cells[Math.round(x/field.step)+','+Math.round(z/field.step)];var n=field.noise(x*3,z*3);mask.push(density>0&&(!c||c.green)?Math.min(y-.40,.95+n*.25-slopes[i]):-1);}
+ for(var i=0;i<positions.length/3;i++){var x=positions[i*3],y=positions[i*3+1],z=positions[i*3+2],c=cells[Math.round(x/field.step)+','+Math.round(z/field.step)],manual=c&&c.grass===1,enabled=manual||density>0&&(!c||c.grass===undefined&&c.green);var n=field.noise(x*3,z*3);mask.push(enabled?Math.min(y-(manual?.10:.40),.95+n*.25-slopes[i]):-1);}
  for(var i=0;i<indices.length;i+=3){var input=[vertex(indices[i]),vertex(indices[i+1]),vertex(indices[i+2])],poly=[];
   for(var j=0;j<3;j++){var a=input[j],b=input[(j+1)%3];if(a.m>=0)poly.push(a.p);if((a.m>=0)!==(b.m>=0)){var t=a.m/(a.m-b.m);poly.push(a.p.map(function(v,k){return v+(b.p[k]-v)*t;}));}}
   if(poly.length<3)continue;
